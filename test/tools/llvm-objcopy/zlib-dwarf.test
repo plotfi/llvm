@@ -1,0 +1,219 @@
+# REQUIRES: shell
+
+# RUN: yaml2obj %s  > %t-clean.o
+# RUN: llvm-objdump -s %t-clean.o -section=.debug_str | grep -i clang
+
+# RUN: cp %t-clean.o %t-clean2.o
+# RUN: cp %t-clean.o %t-zlib.o
+# RUN: cp %t-clean.o %t-zlib-gnu.o
+
+# RUN: llvm-objcopy %t-clean2.o
+# RUN: llvm-objcopy --compress-debug-sections=zlib %t-zlib.o
+# RUN: llvm-objcopy --compress-debug-sections=zlib-gnu %t-zlib-gnu.o
+
+# RUN: llvm-objdump -s %t-zlib.o -section=.debug_str | grep -vi clang
+# RUN: llvm-objdump -s %t-zlib.o | grep -v ZLIB
+# RUN: llvm-objdump -s %t-zlib.o | grep -v "\.zdebug"
+
+# RUN: llvm-objdump -s %t-zlib-gnu.o -section=.debug_str | grep -vi clang
+# RUN: llvm-objdump -s %t-zlib-gnu.o | grep ZLIB
+# RUN: llvm-objdump -s %t-zlib-gnu.o | grep "\.zdebug"
+
+# RUN: llvm-objcopy --decompress-debug-sections %t-zlib.o
+# RUN: llvm-objcopy --decompress-debug-sections %t-zlib-gnu.o
+
+# RUN: llvm-objdump -s %t-clean2.o   | grep " section \." | cut -f1 -d':' | cut -f4 -d' ' | xargs -I% llvm-objdump -s -section=% %t-clean2.o   | grep -v "file format" > %t-clean2.o.txt
+# RUN: llvm-objdump -s %t-zlib.o     | grep " section \." | cut -f1 -d':' | cut -f4 -d' ' | xargs -I% llvm-objdump -s -section=% %t-zlib.o     | grep -v "file format" > %t-zlib.o.txt
+# RUN: llvm-objdump -s %t-zlib-gnu.o | grep " section \." | cut -f1 -d':' | cut -f4 -d' ' | xargs -I% llvm-objdump -s -section=% %t-zlib-gnu.o | grep -v "file format" > %t-zlib-gnu.o.txt
+
+# RUN: cmp %t-clean2.o.txt %t-zlib.o.txt
+# RUN: cmp %t-clean2.o.txt %t-zlib-gnu.o.txt
+
+--- !ELF
+FileHeader:      
+  Class:           ELFCLASS64
+  Data:            ELFDATA2LSB
+  Type:            ET_REL
+  Machine:         EM_X86_64
+Sections:        
+  - Name:            .text
+    Type:            SHT_PROGBITS
+    Flags:           [ SHF_ALLOC, SHF_EXECINSTR ]
+    AddressAlign:    0x0000000000000010
+    Content:         554889E54883EC1048B80000000000000000897DFC8975F88B75FC8B55F84889C7B000E8000000008B55FC0355F88945F489D04883C4105DC3
+  - Name:            .rela.text
+    Type:            SHT_RELA
+    Link:            .symtab
+    AddressAlign:    0x0000000000000008
+    Info:            .text
+    Relocations:     
+      - Offset:          0x000000000000000A
+        Symbol:          .rodata.str1.1
+        Type:            R_X86_64_64
+      - Offset:          0x0000000000000024
+        Symbol:          printf
+        Type:            R_X86_64_PC32
+        Addend:          -4
+  - Name:            .rodata.str1.1
+    Type:            SHT_PROGBITS
+    Flags:           [ SHF_ALLOC, SHF_MERGE, SHF_STRINGS ]
+    AddressAlign:    0x0000000000000001
+    Content:         2564202B2025640A00
+  - Name:            .debug_str
+    Type:            SHT_PROGBITS
+    Flags:           [ SHF_MERGE, SHF_STRINGS ]
+    AddressAlign:    0x0000000000000001
+    Content:         46616365626F6F6B20636C616E672076657273696F6E20362E302E3020286C6C766D3A20643161616332376537326138353765393761316432373932383032623335363664373130383161362C206366653A20316431376134323466656137313738613363343434373732303766363033353764386339366335632C20636F6D70696C65722D72743A20663033656661636664666431666533363735383563653962663432313439376661356632653163632C206C6C643A206366396536643666653134313833343339346162306337396233666664643631623732323534613020316431376134323466656137313738613363343434373732303766363033353764386339366335632920287373683A2F2F6769742D726F2E7669702E66616365626F6F6B2E636F6D2F646174612F6769747265706F732F6F736D6574612F65787465726E616C2F6C6C766D20643161616332376537326138353765393761316432373932383032623335363664373130383161362920286261736564206F6E204C4C564D20362E302E302900666F6F2E63002F686F6D652F706C6F7466692F50726F6A656374732F6C6C766D2D7374616E64616C6F6E6500666F6F00696E740061006200
+  - Name:            .debug_abbrev
+    Type:            SHT_PROGBITS
+    AddressAlign:    0x0000000000000001
+    Content:         011101250E1305030E10171B0EB44219110112060000022E01110112064018030E3A0B3B0B271949133F1900000305000218030E3A0B3B0B49130000042400030E3E0B0B0B000000
+  - Name:            .debug_info
+    Type:            SHT_PROGBITS
+    AddressAlign:    0x0000000000000001
+    Content:         640000000400000000000801000000000C00000000000000000000000000000000000000000039000000020000000000000000390000000156000000000102600000000302917C000000000102600000000302917800000000010260000000000400000000050400
+  - Name:            .rela.debug_info
+    Type:            SHT_RELA
+    Link:            .symtab
+    AddressAlign:    0x0000000000000008
+    Info:            .debug_info
+    Relocations:     
+      - Offset:          0x0000000000000006
+        Symbol:          .debug_abbrev
+        Type:            R_X86_64_32
+      - Offset:          0x000000000000000C
+        Symbol:          .debug_str
+        Type:            R_X86_64_32
+      - Offset:          0x0000000000000012
+        Symbol:          .debug_str
+        Type:            R_X86_64_32
+        Addend:          398
+      - Offset:          0x0000000000000016
+        Symbol:          .debug_line
+        Type:            R_X86_64_32
+      - Offset:          0x000000000000001A
+        Symbol:          .debug_str
+        Type:            R_X86_64_32
+        Addend:          404
+      - Offset:          0x000000000000001E
+        Symbol:          .text
+        Type:            R_X86_64_64
+      - Offset:          0x000000000000002B
+        Symbol:          .text
+        Type:            R_X86_64_64
+      - Offset:          0x0000000000000039
+        Symbol:          .debug_str
+        Type:            R_X86_64_32
+        Addend:          442
+      - Offset:          0x0000000000000047
+        Symbol:          .debug_str
+        Type:            R_X86_64_32
+        Addend:          450
+      - Offset:          0x0000000000000055
+        Symbol:          .debug_str
+        Type:            R_X86_64_32
+        Addend:          452
+      - Offset:          0x0000000000000061
+        Symbol:          .debug_str
+        Type:            R_X86_64_32
+        Addend:          446
+  - Name:            .debug_ranges
+    Type:            SHT_PROGBITS
+    AddressAlign:    0x0000000000000001
+    Content:         ''
+  - Name:            .debug_macinfo
+    Type:            SHT_PROGBITS
+    AddressAlign:    0x0000000000000001
+    Content:         '00'
+  - Name:            .debug_pubnames
+    Type:            SHT_PROGBITS
+    AddressAlign:    0x0000000000000001
+    Content:         16000000020000000000680000002A000000666F6F0000000000
+  - Name:            .rela.debug_pubnames
+    Type:            SHT_RELA
+    Link:            .symtab
+    AddressAlign:    0x0000000000000008
+    Info:            .debug_pubnames
+    Relocations:     
+      - Offset:          0x0000000000000006
+        Symbol:          .debug_info
+        Type:            R_X86_64_32
+  - Name:            .debug_pubtypes
+    Type:            SHT_PROGBITS
+    AddressAlign:    0x0000000000000001
+    Content:         '160000000200000000006800000060000000696E740000000000'
+  - Name:            .rela.debug_pubtypes
+    Type:            SHT_RELA
+    Link:            .symtab
+    AddressAlign:    0x0000000000000008
+    Info:            .debug_pubtypes
+    Relocations:     
+      - Offset:          0x0000000000000006
+        Symbol:          .debug_info
+        Type:            R_X86_64_32
+  - Name:            .comment
+    Type:            SHT_PROGBITS
+    Flags:           [ SHF_MERGE, SHF_STRINGS ]
+    AddressAlign:    0x0000000000000001
+    Content:         0046616365626F6F6B20636C616E672076657273696F6E20362E302E3020286C6C766D3A20643161616332376537326138353765393761316432373932383032623335363664373130383161362C206366653A20316431376134323466656137313738613363343434373732303766363033353764386339366335632C20636F6D70696C65722D72743A20663033656661636664666431666533363735383563653962663432313439376661356632653163632C206C6C643A206366396536643666653134313833343339346162306337396233666664643631623732323534613020316431376134323466656137313738613363343434373732303766363033353764386339366335632920287373683A2F2F6769742D726F2E7669702E66616365626F6F6B2E636F6D2F646174612F6769747265706F732F6F736D6574612F65787465726E616C2F6C6C766D20643161616332376537326138353765393761316432373932383032623335363664373130383161362920286261736564206F6E204C4C564D20362E302E302900
+  - Name:            .note.GNU-stack
+    Type:            SHT_PROGBITS
+    AddressAlign:    0x0000000000000001
+    Content:         ''
+  - Name:            .eh_frame
+    Type:            SHT_X86_64_UNWIND
+    Flags:           [ SHF_ALLOC ]
+    AddressAlign:    0x0000000000000008
+    Content:         1400000000000000017A5200017810011B0C0708900100001C0000001C000000000000003900000000410E108602430D0600000000000000
+  - Name:            .rela.eh_frame
+    Type:            SHT_RELA
+    Link:            .symtab
+    AddressAlign:    0x0000000000000008
+    Info:            .eh_frame
+    Relocations:     
+      - Offset:          0x0000000000000020
+        Symbol:          .text
+        Type:            R_X86_64_PC32
+  - Name:            .debug_line
+    Type:            SHT_PROGBITS
+    AddressAlign:    0x0000000000000001
+    Content:         4B00000004001D000000010101FB0E0D00010101010000000100000100666F6F2E63000000000000090200000000000000001305170A0875051A063C05033C050A069F050C063C05033C020B000101
+  - Name:            .rela.debug_line
+    Type:            SHT_RELA
+    Link:            .symtab
+    AddressAlign:    0x0000000000000008
+    Info:            .debug_line
+    Relocations:     
+      - Offset:          0x000000000000002A
+        Symbol:          .text
+        Type:            R_X86_64_64
+Symbols:         
+  Local:           
+    - Name:            foo.c
+      Type:            STT_FILE
+    - Name:            .text
+      Type:            STT_SECTION
+      Section:         .text
+    - Name:            .rodata.str1.1
+      Type:            STT_SECTION
+      Section:         .rodata.str1.1
+    - Name:            .debug_str
+      Type:            STT_SECTION
+      Section:         .debug_str
+    - Name:            .debug_abbrev
+      Type:            STT_SECTION
+      Section:         .debug_abbrev
+    - Name:            .debug_info
+      Type:            STT_SECTION
+      Section:         .debug_info
+    - Name:            .debug_line
+      Type:            STT_SECTION
+      Section:         .debug_line
+  Global:          
+    - Name:            foo
+      Type:            STT_FUNC
+      Section:         .text
+      Size:            0x0000000000000039
+    - Name:            printf
+DynamicSymbols:  
+...

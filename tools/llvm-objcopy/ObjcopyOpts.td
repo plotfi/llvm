@@ -16,6 +16,11 @@ defm input_target : Eq<"input-target">,
 defm output_target : Eq<"output-target">,
                      HelpText<"Format of the output file">,
                      Values<"binary">;
+defm compress_debug_sections : Eq<"compress-debug-sections">,
+                     MetaVarName<"[ none | zlib | zlib-gnu (deprecated) ]">,
+                     HelpText<"Enable zlib-gnu or zlib Compression of DWARF debug sections.">;
+def decompress_debug_sections : Flag<["-", "--"], "decompress-debug-sections">,
+                     HelpText<"Decompress DWARF debug sections.">;
 def O : JoinedOrSeparate<["-"], "O">,
         Alias<output_target>;
 defm split_dwo : Eq<"split-dwo">,

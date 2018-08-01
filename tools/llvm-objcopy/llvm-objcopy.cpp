@@ -16,9 +16,12 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/MC/MCTargetOptions.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Object/ArchiveWriter.h"
 #include "llvm/Object/Binary.h"
+#include "llvm/Object/Compressor.h"
+#include "llvm/Object/Decompressor.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ELFTypes.h"
 #include "llvm/Object/Error.h"
@@ -157,6 +160,9 @@ struct CopyConfig {
   bool DiscardAll = false;
   bool OnlyKeepDebug = false;
   bool KeepFileSymbols = false;
+  bool DecompressDebugSections = false;
+
+  DebugCompressionType CompressDebugSections = DebugCompressionType::None;
 };
 
 using SectionPred = std::function<bool(const SectionBase &Sec)>;
@@ -321,6 +327,83 @@ static void SplitDWOToFile(const CopyConfig &Config, const Reader &Reader,
   auto Writer = CreateWriter(Config, *DWOFile, FB, OutputElfType);
   Writer->finalize();
   Writer->write();
+}
+
+template <typename T>
+std::unique_ptr<SmallVectorImpl<char>> decompress(StringRef &Name,
+                                                  StringRef Contents) {
+
+  auto ModifiedContents = make_unique<SmallVector<char, 128>>();
+
+  bool Is64Bit = T::Is64Bits;
+  bool IsLittle = (T::TargetEndianness == endianness::little);
+  auto D = object::Decompressor::create(Name, Contents, IsLittle, Is64Bit);
+  if (!D)
+    consumeError(D.takeError());
+
+  auto E = D->resizeAndDecompress(*ModifiedContents.get());
+  consumeError(std::move(E));
+
+  if (const bool IsGnuStyle = Name.startswith(".zdebug"))
+    Name = object::getDebugSectionName(Name, !IsGnuStyle);
+
+  return std::move(ModifiedContents);
+}
+
+std::unique_ptr<SmallVectorImpl<char>>
+decompress(StringRef &Name, StringRef Contents, ElfType OutputElfType) {
+  switch (OutputElfType) {
+  case ELFT_ELF32LE:
+    return decompress<object::ELF32LE>(Name, Contents);
+  case ELFT_ELF64LE:
+    return decompress<object::ELF64LE>(Name, Contents);
+  case ELFT_ELF32BE:
+    return decompress<object::ELF32BE>(Name, Contents);
+  case ELFT_ELF64BE:
+    return decompress<object::ELF64BE>(Name, Contents);
+  }
+  llvm_unreachable("Invalid output format");
+}
+
+template <typename T>
+std::unique_ptr<SmallVectorImpl<char>>
+compress(StringRef &Name, StringRef Contents, uint64_t Align, bool IsGnuStyle) {
+
+  auto ModifiedContents = make_unique<SmallVector<char, 128>>();
+
+  object::endianness E = T::TargetEndianness;
+  raw_svector_ostream OS(*ModifiedContents.get());
+  support::endian::Writer W(OS, E);
+
+  auto C = object::Compressor<T>(Contents);
+  C.writeHeader(W, Contents.size(), Align, IsGnuStyle);
+  auto Error = C.writeCompressedSectionData(W);
+  consumeError(std::move(Error));
+
+  if (ModifiedContents->size() < Contents.size()) {
+    if (IsGnuStyle)
+      Name = object::getDebugSectionName(Name, IsGnuStyle);
+    return std::move(ModifiedContents);
+  }
+
+  return nullptr;
+}
+
+std::unique_ptr<SmallVectorImpl<char>> compress(StringRef &Name,
+                                                StringRef Contents,
+                                                uint64_t Align, bool IsGnuStyle,
+                                                ElfType OutputElfType) {
+  switch (OutputElfType) {
+  case ELFT_ELF32LE:
+    return compress<object::ELF32LE>(Name, Contents, Align, IsGnuStyle);
+  case ELFT_ELF64LE:
+    return compress<object::ELF64LE>(Name, Contents, Align, IsGnuStyle);
+  case ELFT_ELF32BE:
+    return compress<object::ELF32BE>(Name, Contents, Align, IsGnuStyle);
+  case ELFT_ELF64BE:
+    return compress<object::ELF64BE>(Name, Contents, Align, IsGnuStyle);
+  }
+  llvm_unreachable("Invalid output format");
 }
 
 // This function handles the high level operations of GNU objcopy including
@@ -555,6 +638,46 @@ static void HandleArgs(const CopyConfig &Config, Object &Obj,
     }
   }
 
+  if ((Config.CompressDebugSections != DebugCompressionType::None) &&
+      !Config.DecompressDebugSections) {
+
+    bool IsGnuStyle =
+        (Config.CompressDebugSections == DebugCompressionType::GNU);
+
+    for (auto &Section : Obj.sections()) {
+      if (object::isCompressed(Section.Name, Section.Flags))
+        continue;
+      if (!object::isCompressable(Section.Name))
+        continue;
+
+      StringRef Contents((const char *)Section.getContents()->data(),
+                         Section.getContents()->size());
+      auto ModifiedContents = compress(Section.Name, Contents, Section.Align,
+                                       IsGnuStyle, OutputElfType);
+
+      if (nullptr == ModifiedContents)
+        continue;
+
+      Section.updateContents(std::move(ModifiedContents));
+
+      if (IsGnuStyle)
+        continue;
+
+      Section.Flags |= ELF::SHF_COMPRESSED;
+    }
+  } else if (Config.DecompressDebugSections) {
+    for (auto &Section : Obj.sections()) {
+      if (!object::isCompressed(Section.Name, Section.Flags))
+        continue;
+
+      StringRef Contents((const char *)Section.getContents()->data(),
+                         Section.getContents()->size());
+
+      auto ModifiedContents = decompress(Section.Name, Contents, OutputElfType);
+      Section.updateContents(std::move(ModifiedContents));
+    }
+  }
+
   if (!Config.AddGnuDebugLink.empty())
     Obj.addSection<GnuDebugLinkSection>(Config.AddGnuDebugLink);
 }
@@ -601,7 +724,8 @@ static Error deepWriteArchive(StringRef ArcName,
   return Error::success();
 }
 
-static void ExecuteElfObjcopyOnArchive(const CopyConfig &Config, const Archive &Ar) {
+static void ExecuteElfObjcopyOnArchive(const CopyConfig &Config,
+                                       const Archive &Ar) {
   std::vector<NewArchiveMember> NewArchiveMembers;
   Error Err = Error::success();
   for (const Archive::Child &Child : Ar.children(Err)) {
@@ -685,6 +809,13 @@ static CopyConfig ParseObjcopyOptions(ArrayRef<const char *> ArgsArr) {
   Config.OutputFormat = InputArgs.getLastArgValue(OBJCOPY_output_target);
   Config.BinaryArch = InputArgs.getLastArgValue(OBJCOPY_binary_architecture);
 
+  Config.CompressDebugSections =
+      StringSwitch<DebugCompressionType>(
+          InputArgs.getLastArgValue(OBJCOPY_compress_debug_sections))
+          .Case("zlib-gnu", DebugCompressionType::GNU)
+          .Case("zlib", DebugCompressionType::Z)
+          .Default(DebugCompressionType::None);
+
   Config.SplitDWO = InputArgs.getLastArgValue(OBJCOPY_split_dwo);
   Config.AddGnuDebugLink = InputArgs.getLastArgValue(OBJCOPY_add_gnu_debuglink);
 
@@ -723,6 +854,8 @@ static CopyConfig ParseObjcopyOptions(ArrayRef<const char *> ArgsArr) {
   Config.DiscardAll = InputArgs.hasArg(OBJCOPY_discard_all);
   Config.OnlyKeepDebug = InputArgs.hasArg(OBJCOPY_only_keep_debug);
   Config.KeepFileSymbols = InputArgs.hasArg(OBJCOPY_keep_file_symbols);
+  Config.DecompressDebugSections =
+      InputArgs.hasArg(OBJCOPY_decompress_debug_sections);
   for (auto Arg : InputArgs.filtered(OBJCOPY_localize_symbol))
     Config.SymbolsToLocalize.push_back(Arg->getValue());
   for (auto Arg : InputArgs.filtered(OBJCOPY_globalize_symbol))
@@ -733,6 +866,12 @@ static CopyConfig ParseObjcopyOptions(ArrayRef<const char *> ArgsArr) {
     Config.SymbolsToRemove.push_back(Arg->getValue());
   for (auto Arg : InputArgs.filtered(OBJCOPY_keep_symbol))
     Config.SymbolsToKeep.push_back(Arg->getValue());
+
+  if (Config.DecompressDebugSections &&
+      Config.CompressDebugSections != DebugCompressionType::None) {
+    error("Cannot specify --compress-debug-sections as well as "
+          "--decompress-debug-sections at the same time.");
+  }
 
   return Config;
 }

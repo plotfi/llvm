@@ -259,6 +259,13 @@ public:
   virtual void removeSymbols(function_ref<bool(const Symbol &)> ToRemove);
   virtual void accept(SectionVisitor &Visitor) const = 0;
   virtual void markSymbols();
+  virtual ArrayRef<uint8_t> *getContents() {
+    assert(false && "Section has no Contents.");
+    return nullptr;
+  }
+  virtual void updateContents(std::unique_ptr<SmallVectorImpl<char>> Contents) {
+    assert(false && "Section has no Contents.");
+  }
 };
 
 class Segment {
@@ -317,6 +324,16 @@ public:
   void removeSectionReferences(const SectionBase *Sec) override;
   void initialize(SectionTableRef SecTable) override;
   void finalize() override;
+
+  // TODO: Remove these. These will go away once CompressedDebugSection is done.
+  std::unique_ptr<SmallVectorImpl<char>> ModifiedContents;
+  ArrayRef<uint8_t> *getContents() override { return &Contents; }
+  void updateContents(std::unique_ptr<SmallVectorImpl<char>> Update) override{
+    ModifiedContents = std::move(Update);
+    Size = ModifiedContents->size();
+    const uint8_t *ContentsPtr = (const uint8_t *)ModifiedContents->data();
+    Contents = ArrayRef<uint8_t>(ContentsPtr, Size);
+  }
 };
 
 class OwnedDataSection : public SectionBase {
