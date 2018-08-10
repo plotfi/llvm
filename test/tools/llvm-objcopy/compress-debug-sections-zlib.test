@@ -1,0 +1,31 @@
+# REQUIRES: zlib
+
+# Reuse compress-debug-sections.test.
+# Here we are testing that zlib properly sets the right magic header and
+# also roundtrips properly.
+
+# RUN: yaml2obj %S/compress-debug-sections.test -o %t.o
+# RUN: llvm-objcopy --compress-debug-sections=zlib %t.o %t-zlib.o
+# RUN: llvm-objcopy --decompress-debug-sections %t-zlib.o %t-decompressed.o
+# RUN: wc -c %t.o | FileCheck %s -check-prefix=SIZE-ORIGINAL
+# RUN: wc -c %t-zlib.o | FileCheck %s -check-prefix=SIZE-COMPRESSED
+
+# RUN: llvm-objdump -s %t.o -section=.debug_str | FileCheck %s
+# RUN: llvm-objdump -s %t-zlib.o | FileCheck %s --check-prefix=CHECK-ZLIB
+# RUN: llvm-objdump -s %t-decompressed.o -section=.debug_str | FileCheck %s
+
+# CHECK: .debug_str
+# CHECK: clang
+
+# CHECK-ZLIB: .debug_str
+# CHECK-ZLIB: c6010000
+
+# CHECK-ZLIB: .debug_info
+# CHECK-ZLIB: 68000000
+
+# SIZE-ORIGINAL: 2456
+# SIZE-COMPRESSED: 2272
+
+# .debug_line doesn't get compressed here because the non-gnu header is too big
+# on Elf64.
+

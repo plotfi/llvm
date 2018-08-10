@@ -1,0 +1,11 @@
+# REQUIRES: zlib
+
+# XFAIL: *
+
+# Reuse compress-debug-sections.test.
+# This is expected to fail, we can't specify both  --compress-debug-sections and
+# --decompress-debug-sections.
+
+# RUN: yaml2obj %S/compress-debug-sections.test  > %t-clean.o
+# RUN: llvm-objcopy --compress-debug-sections=zlib --decompress-debug-sections %t-clean.o
+

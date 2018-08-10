@@ -106,6 +106,10 @@ void BinarySectionWriter::visit(const SectionIndexSection &Sec) {
   error("Cannot write symbol section index table '" + Sec.Name + "' ");
 }
 
+void BinarySectionWriter::visit(const CompressedSection &Sec) {
+  error("Cannot write compressed section '" + Sec.Name + "' ");
+}
+
 void BinarySectionWriter::visit(const SymbolTableSection &Sec) {
   error("Cannot write symbol table '" + Sec.Name + "' out to binary");
 }
@@ -126,7 +130,7 @@ void SectionWriter::visit(const Section &Sec) {
   if (Sec.Type == SHT_NOBITS)
     return;
   uint8_t *Buf = Out.getBufferStart() + Sec.Offset;
-  std::copy(std::begin(Sec.Contents), std::end(Sec.Contents), Buf);
+  std::copy(std::begin(Sec.OriginalData), std::end(Sec.OriginalData), Buf);
 }
 
 void Section::accept(SectionVisitor &Visitor) const { Visitor.visit(*this); }
@@ -137,6 +141,18 @@ void SectionWriter::visit(const OwnedDataSection &Sec) {
 }
 
 void OwnedDataSection::accept(SectionVisitor &Visitor) const {
+  Visitor.visit(*this);
+}
+
+template <class ELFT>
+void ELFSectionWriter<ELFT>::visit(const CompressedSection &Sec) {
+  uint8_t *Buf = Out.getBufferStart();
+  Buf += Sec.Offset;
+  std::copy(Sec.Data.begin(), Sec.Data.end(), Buf);
+}
+
+void CompressedSection::finalize() {}
+void CompressedSection::accept(SectionVisitor &Visitor) const {
   Visitor.visit(*this);
 }
 
@@ -927,18 +943,6 @@ template <class R> size_t size(R &&Range) {
 Writer::~Writer() {}
 
 Reader::~Reader() {}
-
-ElfType ELFReader::getElfType() const {
-  if (isa<ELFObjectFile<ELF32LE>>(Bin))
-    return ELFT_ELF32LE;
-  if (isa<ELFObjectFile<ELF64LE>>(Bin))
-    return ELFT_ELF64LE;
-  if (isa<ELFObjectFile<ELF32BE>>(Bin))
-    return ELFT_ELF32BE;
-  if (isa<ELFObjectFile<ELF64BE>>(Bin))
-    return ELFT_ELF64BE;
-  llvm_unreachable("Invalid ELFType");
-}
 
 std::unique_ptr<Object> ELFReader::create() const {
   auto Obj = llvm::make_unique<Object>();

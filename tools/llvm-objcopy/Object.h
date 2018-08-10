@@ -15,6 +15,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/MC/StringTableBuilder.h"
+#include "llvm/Object/Compressor.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Support/FileOutputBuffer.h"
 #include "llvm/Support/JamCRC.h"
@@ -39,6 +40,7 @@ class DynamicRelocationSection;
 class GnuDebugLinkSection;
 class GroupSection;
 class SectionIndexSection;
+class CompressedSection;
 class Segment;
 class Object;
 struct Symbol;
@@ -62,8 +64,6 @@ public:
   T *getSectionOfType(uint32_t Index, Twine IndexErrMsg, Twine TypeErrMsg);
 };
 
-enum ElfType { ELFT_ELF32LE, ELFT_ELF64LE, ELFT_ELF32BE, ELFT_ELF64BE };
-
 class SectionVisitor {
 public:
   virtual ~SectionVisitor();
@@ -77,6 +77,7 @@ public:
   virtual void visit(const GnuDebugLinkSection &Sec) = 0;
   virtual void visit(const GroupSection &Sec) = 0;
   virtual void visit(const SectionIndexSection &Sec) = 0;
+  virtual void visit(const CompressedSection &Sec) = 0;
 };
 
 class SectionWriter : public SectionVisitor {
@@ -95,6 +96,7 @@ public:
   virtual void visit(const GnuDebugLinkSection &Sec) override = 0;
   virtual void visit(const GroupSection &Sec) override = 0;
   virtual void visit(const SectionIndexSection &Sec) override = 0;
+  virtual void visit(const CompressedSection &Sec) override = 0;
 
   explicit SectionWriter(Buffer &Buf) : Out(Buf) {}
 };
@@ -112,6 +114,7 @@ public:
   void visit(const GnuDebugLinkSection &Sec) override;
   void visit(const GroupSection &Sec) override;
   void visit(const SectionIndexSection &Sec) override;
+  void visit(const CompressedSection &Sec) override;
 
   explicit ELFSectionWriter(Buffer &Buf) : SectionWriter(Buf) {}
 };
@@ -129,6 +132,7 @@ public:
   void visit(const GnuDebugLinkSection &Sec) override;
   void visit(const GroupSection &Sec) override;
   void visit(const SectionIndexSection &Sec) override;
+  void visit(const CompressedSection &Sec) override;
 
   explicit BinarySectionWriter(Buffer &Buf) : SectionWriter(Buf) {}
 };
@@ -308,11 +312,10 @@ public:
 class Section : public SectionBase {
   MAKE_SEC_WRITER_FRIEND
 
-  ArrayRef<uint8_t> Contents;
   SectionBase *LinkSection = nullptr;
 
 public:
-  explicit Section(ArrayRef<uint8_t> Data) : Contents(Data) {}
+  explicit Section(ArrayRef<uint8_t> Data) { OriginalData = Data; }
 
   void accept(SectionVisitor &Visitor) const override;
   void removeSectionReferences(const SectionBase *Sec) override;
@@ -323,18 +326,43 @@ public:
 class OwnedDataSection : public SectionBase {
   MAKE_SEC_WRITER_FRIEND
 
+protected:
+  std::string OwnedName;
   std::vector<uint8_t> Data;
 
 public:
   OwnedDataSection(StringRef SecName, ArrayRef<uint8_t> Data)
       : Data(std::begin(Data), std::end(Data)) {
-    Name = SecName;
+    OriginalData = ArrayRef<uint8_t>(Data.data(), Data.size());
+    OwnedName = SecName.str();
+    Name = OwnedName;
     Type = ELF::SHT_PROGBITS;
     Size = Data.size();
     OriginalOffset = std::numeric_limits<uint64_t>::max();
   }
 
   void accept(SectionVisitor &Sec) const override;
+};
+
+class CompressedSection : public OwnedDataSection {
+  MAKE_SEC_WRITER_FRIEND
+
+  bool isGnuStyle() const {
+    ArrayRef<uint8_t> GnuPrefix = {'Z', 'L', 'I', 'B'};
+    return std::equal(GnuPrefix.begin(), GnuPrefix.end(), Data.data());
+  }
+
+public:
+  CompressedSection(StringRef NewName, ArrayRef<uint8_t> Data,
+                    const SectionBase &Sec)
+      : OwnedDataSection(NewName, Data) {
+    Align = Sec.Align;
+    if (!isGnuStyle())
+      Flags |= ELF::SHF_COMPRESSED;
+  }
+
+  void finalize() override;
+  void accept(SectionVisitor &Visitor) const override;
 };
 
 // There are two types of string tables that can exist, dynamic and not dynamic.
@@ -652,7 +680,6 @@ class ELFReader : public Reader {
   Binary *Bin;
 
 public:
-  ElfType getElfType() const;
   std::unique_ptr<Object> create() const override;
   explicit ELFReader(Binary *B) : Bin(B){};
 };
